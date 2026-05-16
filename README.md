@@ -5,9 +5,14 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-15%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-24%20passing-brightgreen.svg)](#tests)
 
-> 🏆 Built for **UiPath AgentHack 2026 — Track 3 (Test Cloud)**
+> 🏆 Built for **UiPath AgentHack 2026 — Track 3**
+
+**UiPath usage:** UiPath Automation Cloud / Maestro orchestrates the workflow;
+ProcessGuard is the external runtime guardrail service called before each
+agent/tool activity. The repository includes an importable OpenAPI connector at
+`uipath/processguard.openapi.json`.
 
 ---
 
@@ -154,32 +159,103 @@ processguard demo                                   # Week 1 demo
 
 ---
 
-## UiPath integration
+## UiPath Automation Cloud integration
 
-ProcessGuard reads UiPath Maestro `.bpmn` files **unchanged** (they're standard BPMN 2.0).
+ProcessGuard is designed so **UiPath is the orchestrator** and ProcessGuard is
+the runtime compliance gate.
 
-**Runtime hook** (mount on dashboard app or your own FastAPI):
+Used UiPath components for the hackathon submission:
 
-```python
-from processguard.integrations.uipath import router
-app.include_router(router)
-```
+| UiPath component | Role in the solution |
+| ---------------- | -------------------- |
+| **UiPath Automation Cloud** | Hosts the orchestrated demo workflow / agent run. |
+| **UiPath Maestro / BPMN** | Owns the refund process model and workflow sequence. |
+| **UiPath Agent Builder or coded agent activity** | Chooses the next business action/tool. |
+| **HTTP Request / Integration Service custom connector** | Calls ProcessGuard before each action. |
+| **Human-in-the-loop step** | Manager approval / escalation when ProcessGuard blocks or requires review. |
 
-Maestro calls `POST /uipath/check`:
+Agent type used:
+
+- **Coding agent layer:** ProcessGuard is Python/FastAPI middleware.
+- **Low-code / UiPath layer:** Automation Cloud / Maestro orchestrates the
+  workflow and calls ProcessGuard through HTTP or the OpenAPI connector.
+- The solution is a **combination**: UiPath orchestration + coded runtime guard.
+
+### Connector setup
+
+1. Run ProcessGuard locally or deploy it:
+
+   ```bash
+   processguard dashboard --port 8765
+   ```
+
+2. If UiPath Cloud needs to call your laptop, expose it with an HTTPS tunnel
+   such as Cloudflare Tunnel or ngrok:
+
+   ```bash
+   ngrok http 8765
+   ```
+
+3. In UiPath Automation Cloud, create/import a custom connector from:
+
+   ```text
+   uipath/processguard.openapi.json
+   ```
+
+4. Replace the connector server URL with your tunnel/deployment URL.
+
+5. In the UiPath workflow/agent, call these actions:
+
+   | Step | Endpoint | Purpose |
+   | ---- | -------- | ------- |
+   | 1 | `POST /uipath/session/start` | Start a guard session for the UiPath job. |
+   | 2 | `POST /uipath/reasoning/check` | Optional gray-zone LLM judge check for agent intent. |
+   | 3 | `POST /uipath/activity/check` | Mandatory pre-activity ALLOW/BLOCK gate. |
+   | 4 | If `allow=true` | UiPath executes the real business activity. |
+   | 5 | If `allow=false` | UiPath routes to human review or replans using `corrective`. |
+
+Example pre-activity gate request:
 
 ```json
-{ "instance_id": "wf-42", "bpmn_path": "refund.bpmn",
-  "next_activity": "execute_refund", "args": {"amount": 9500},
-  "context": {"amount": 9500} }
+{
+  "instance_id": "uipath-job-42",
+  "next_activity": "execute_refund",
+  "args": {"amount": 9500},
+  "context": {"amount": 9500, "customer_id": "C-VIP-007"},
+  "agent_name": "RefundAgent",
+  "commit_on_allow": true
+}
 ```
 
-Response:
+Example BLOCK response:
 
 ```json
-{ "allow": false, "decision": "BLOCK", "violation": "wrong_order",
-  "corrective": "🛑 Action BLOCKED... Legal next steps: ['verify_2fa']",
-  "allowed_next": ["verify_2fa"], "current_node": "receive_refund_request" }
+{
+  "allow": false,
+  "decision": "BLOCK",
+  "violation": "wrong_order",
+  "corrective": "Action BLOCKED by ProcessGuard...",
+  "allowed_next": ["verify_2fa"],
+  "current_node": "receive_refund_request",
+  "judge_used": true,
+  "judge_provider": "demo",
+  "suggested_correction": {"tool": "verify_2fa", "args": {}}
+}
 ```
+
+### What the demo video must show
+
+For AgentHack submission, the video should show:
+
+1. UiPath Automation Cloud / Maestro launching the refund agent workflow.
+2. UiPath calling the ProcessGuard connector before a tool/activity.
+3. ProcessGuard dashboard receiving the same event live.
+4. A compliant path where UiPath continues after `allow=true`.
+5. A blocked path where UiPath routes to human review/replan after `allow=false`.
+
+The local Python dashboard alone is not the orchestration proof; the required
+submission proof is UiPath starting and managing the workflow while
+ProcessGuard gates each step.
 
 ---
 
@@ -196,9 +272,10 @@ Response:
 | Watch & Learn (trace→BPMN)    | ✅     | `processguard/learn.py`               |
 | SQLite audit log              | ✅     | `processguard/audit.py`               |
 | FastAPI + HTMX dashboard      | ✅     | `processguard/dashboard.py`           |
-| UiPath Maestro hook           | ✅     | `processguard/integrations/uipath.py` |
+| UiPath Automation Cloud adapter | ✅   | `processguard/integrations/uipath.py` |
+| UiPath OpenAPI connector spec | ✅     | `uipath/processguard.openapi.json`    |
 | CLI                           | ✅     | `processguard/cli.py`                 |
-| 15 unit tests                 | ✅     | `tests/`                              |
+| 24 tests                      | ✅     | `tests/`                              |
 
 ---
 
@@ -217,7 +294,9 @@ processguard/
 │   ├── dashboard.py         # FastAPI + HTMX UI
 │   ├── cli.py               # `processguard` command
 │   └── integrations/
-│       └── uipath.py        # Maestro adapter + HTTP hook
+│       └── uipath.py        # Automation Cloud / Maestro HTTP adapter
+├── uipath/
+│   └── processguard.openapi.json  # Integration Service custom connector
 ├── examples/
 │   ├── refund_flow.bpmn     # 8-node refund workflow with 3-way gateway
 │   └── traces.py            # 3 example agent traces
@@ -226,7 +305,7 @@ processguard/
 │   ├── demo_week2_middleware.py  # auto-intercept + re-plan loop
 │   ├── demo_full.py         # full stack: all 4 layers
 │   └── demo_week3_live.py   # live Claude agent (needs ANTHROPIC_API_KEY)
-└── tests/                   # 15 unit tests, all green
+└── tests/                   # 24 tests, all green
 ```
 
 ---
@@ -234,8 +313,8 @@ processguard/
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v
-# Ran 15 tests in 0.27s — OK
+python -m pytest -q
+# 24 passed
 ```
 
 ---
@@ -247,7 +326,8 @@ Out of scope on purpose:
 - ❌ Replacing your agent framework — we wrap, we don't replace.
 - ❌ Generic policy DSL — BPMN is the only input format.
 - ❌ PDF→BPMN auto-extraction — Watch & Learn is more reliable.
-- ❌ Multi-agent orchestration — one process, one agent, one guard.
+- ❌ Replacing UiPath orchestration — UiPath owns orchestration; ProcessGuard
+  gates each action.
 
 ---
 

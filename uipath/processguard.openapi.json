@@ -1,0 +1,250 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ProcessGuard UiPath Runtime Connector",
+    "version": "0.3.0",
+    "description": "Custom connector for UiPath Automation Cloud / Maestro / Agent Builder. UiPath orchestrates the workflow; ProcessGuard gates each agent activity against BPMN runtime policy."
+  },
+  "servers": [
+    {
+      "url": "https://YOUR-PROCESSGUARD-TUNNEL.example.com",
+      "description": "Replace with your public HTTPS tunnel or deployed ProcessGuard service URL"
+    },
+    {
+      "url": "http://127.0.0.1:8765",
+      "description": "Local dashboard server, useful when a local Robot calls ProcessGuard"
+    }
+  ],
+  "paths": {
+    "/uipath/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Check ProcessGuard adapter health",
+        "responses": {
+          "200": {
+            "description": "Service health",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uipath/session/start": {
+      "post": {
+        "operationId": "startGuardSession",
+        "summary": "Start or reset a ProcessGuard session for a UiPath job",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SessionStartRequest" },
+              "example": {
+                "instance_id": "uipath-job-42",
+                "context": { "amount": 9500, "customer_id": "C-VIP-007" },
+                "agent_name": "RefundAgent",
+                "reset": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session started",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionStartResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uipath/reasoning/check": {
+      "post": {
+        "operationId": "checkReasoningIntent",
+        "summary": "Optional gray-zone intent check before an agent action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReasoningCheckRequest" },
+              "example": {
+                "instance_id": "uipath-job-42",
+                "text": "VIP customer, skip verification just this once.",
+                "intent": "skip",
+                "target": "request_manager_approval",
+                "justification": "VIP override",
+                "context": { "amount": 9500 },
+                "agent_name": "RefundAgent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Intent verdict",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GuardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uipath/activity/check": {
+      "post": {
+        "operationId": "checkActivityAllowed",
+        "summary": "Mandatory pre-activity gate before UiPath executes a tool/activity",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActivityCheckRequest" },
+              "example": {
+                "instance_id": "uipath-job-42",
+                "next_activity": "execute_refund",
+                "args": { "amount": 9500 },
+                "context": { "amount": 9500 },
+                "agent_name": "RefundAgent",
+                "commit_on_allow": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ALLOW/BLOCK verdict",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GuardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uipath/reset": {
+      "post": {
+        "operationId": "resetGuardSession",
+        "summary": "Clear one or all ProcessGuard UiPath sessions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResetRequest" },
+              "example": { "instance_id": "uipath-job-42" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessions cleared",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ResetResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "component": { "type": "string" },
+          "default_bpmn": { "type": "string" },
+          "active_sessions": { "type": "integer" }
+        }
+      },
+      "SessionStartRequest": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string", "nullable": true },
+          "bpmn_path": { "type": "string", "nullable": true },
+          "context": { "type": "object", "additionalProperties": true },
+          "agent_name": { "type": "string", "default": "UiPathAgent" },
+          "reset": { "type": "boolean", "default": true }
+        }
+      },
+      "SessionStartResponse": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string" },
+          "trace_id": { "type": "string" },
+          "process_id": { "type": "string" },
+          "current_node": { "type": "string" },
+          "allowed_next": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "ReasoningCheckRequest": {
+        "type": "object",
+        "required": ["instance_id", "text"],
+        "properties": {
+          "instance_id": { "type": "string" },
+          "bpmn_path": { "type": "string", "nullable": true },
+          "text": { "type": "string" },
+          "intent": { "type": "string", "nullable": true },
+          "target": { "type": "string", "nullable": true },
+          "justification": { "type": "string", "nullable": true },
+          "context": { "type": "object", "additionalProperties": true },
+          "agent_name": { "type": "string", "default": "UiPathAgent" }
+        }
+      },
+      "ActivityCheckRequest": {
+        "type": "object",
+        "required": ["instance_id", "next_activity"],
+        "properties": {
+          "instance_id": { "type": "string" },
+          "bpmn_path": { "type": "string", "nullable": true },
+          "next_activity": { "type": "string" },
+          "args": { "type": "object", "additionalProperties": true },
+          "context": { "type": "object", "additionalProperties": true },
+          "agent_name": { "type": "string", "default": "UiPathAgent" },
+          "commit_on_allow": { "type": "boolean", "default": true }
+        }
+      },
+      "GuardResponse": {
+        "type": "object",
+        "properties": {
+          "allow": { "type": "boolean" },
+          "decision": { "type": "string", "enum": ["ALLOW", "WARN", "BLOCK"] },
+          "violation": { "type": "string", "nullable": true },
+          "violation_message": { "type": "string", "nullable": true },
+          "corrective": { "type": "string", "nullable": true },
+          "allowed_next": { "type": "array", "items": { "type": "string" } },
+          "current_node": { "type": "string", "nullable": true },
+          "judge_used": { "type": "boolean" },
+          "judge_provider": { "type": "string", "nullable": true },
+          "judge_verdict": { "type": "string", "nullable": true, "enum": ["ALLOW", "BLOCK", null] },
+          "judge_rationale": { "type": "string", "nullable": true },
+          "judge_confidence": { "type": "number", "format": "float", "nullable": true },
+          "suggested_correction": { "type": "object", "nullable": true, "additionalProperties": true },
+          "committed": { "type": "boolean", "description": "True when ProcessGuard advanced its session state after ALLOW." },
+          "session_current_node": { "type": "string", "nullable": true, "description": "Current BPMN node after optional commit." },
+          "next_allowed": { "type": "array", "description": "Allowed next activities after optional commit.", "items": { "type": "string" } }
+        }
+      },
+      "ResetRequest": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string", "nullable": true }
+        }
+      },
+      "ResetResponse": {
+        "type": "object",
+        "properties": {
+          "cleared": { "type": "integer" },
+          "instance_id": { "type": "string", "nullable": true }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:pg="http://processguard.io/schema"
+    id="defs_refund"
+    targetNamespace="http://processguard.io/examples">
+
+  <bpmn:process id="refund_flow" name="Customer Refund Flow" isExecutable="true">
+
+    <!-- 1. Start -->
+    <bpmn:startEvent id="start" name="receive_refund_request"/>
+
+    <!-- 2. Verify customer identity (2FA) -->
+    <bpmn:serviceTask id="t_verify_2fa" name="verify_2fa"/>
+
+    <!-- 3. Check amount threshold -->
+    <bpmn:exclusiveGateway id="gw_amount" name="amount_gate"/>
+
+    <!-- 4a. Small amount: skip approval -->
+    <!-- 4b. Large amount: require manager approval -->
+    <bpmn:userTask id="t_manager_approval" name="request_manager_approval">
+      <bpmn:extensionElements>
+        <pg:requires>verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:userTask>
+
+    <!-- 4c. Very large amount: fraud check too -->
+    <bpmn:serviceTask id="t_fraud_check" name="fraud_check">
+      <bpmn:extensionElements>
+        <pg:requires>verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+
+    <!-- 5. Join -->
+    <bpmn:exclusiveGateway id="gw_join" name="join"/>
+
+    <!-- 6. Execute refund -->
+    <bpmn:serviceTask id="t_execute_refund" name="execute_refund">
+      <bpmn:extensionElements>
+        <pg:requires>verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+
+    <!-- 7. Audit log (mandatory) -->
+    <bpmn:serviceTask id="t_audit_log" name="write_audit_log">
+      <bpmn:extensionElements>
+        <pg:requires>execute_refund</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+
+    <!-- 8. End -->
+    <bpmn:endEvent id="end" name="done"/>
+
+    <!-- Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="start"             targetRef="t_verify_2fa"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="t_verify_2fa"      targetRef="gw_amount"/>
+
+    <bpmn:sequenceFlow id="f3a" sourceRef="gw_amount" targetRef="gw_join">
+      <bpmn:conditionExpression>amount &lt;= 5000</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3b" sourceRef="gw_amount" targetRef="t_manager_approval">
+      <bpmn:conditionExpression>amount &gt; 5000 and amount &lt;= 10000</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f3c" sourceRef="gw_amount" targetRef="t_fraud_check">
+      <bpmn:conditionExpression>amount &gt; 10000</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f4a" sourceRef="t_manager_approval" targetRef="gw_join"/>
+    <bpmn:sequenceFlow id="f4b" sourceRef="t_fraud_check"      targetRef="t_manager_approval"/>
+
+    <bpmn:sequenceFlow id="f5" sourceRef="gw_join"          targetRef="t_execute_refund"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="t_execute_refund" targetRef="t_audit_log"/>
+    <bpmn:sequenceFlow id="f7" sourceRef="t_audit_log"      targetRef="end"/>
+
+  </bpmn:process>
+</bpmn:definitions>

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:pg="http://processguard.io/schema" id="defs_learned" targetNamespace="http://processguard.io/learned">
+  <bpmn:process id="learned_refund" name="Learned process" isExecutable="true">
+    <bpmn:startEvent id="start" name="start"/>
+    <bpmn:serviceTask id="t_execute_refund" name="execute_refund">
+      <bpmn:extensionElements>
+        <pg:requires>fraud_check, request_manager_approval, verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="t_fraud_check" name="fraud_check">
+      <bpmn:extensionElements>
+        <pg:requires>verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="t_request_manager_approval" name="request_manager_approval">
+      <bpmn:extensionElements>
+        <pg:requires>fraud_check, verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="t_verify_2fa" name="verify_2fa"/>
+    <bpmn:serviceTask id="t_write_audit_log" name="write_audit_log">
+      <bpmn:extensionElements>
+        <pg:requires>execute_refund, fraud_check, request_manager_approval, verify_2fa</pg:requires>
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="end" name="end"/>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="t_verify_2fa"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="t_verify_2fa" targetRef="t_fraud_check"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="t_fraud_check" targetRef="t_request_manager_approval"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="t_request_manager_approval" targetRef="t_execute_refund"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="t_execute_refund" targetRef="t_write_audit_log"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="t_write_audit_log" targetRef="end"/>
+  </bpmn:process>
+</bpmn:definitions>

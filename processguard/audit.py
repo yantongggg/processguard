@@ -1,0 +1,97 @@
+"""SQLite-backed audit log for every guard decision.
+
+Why: compliance teams need provable, timestamped, tamper-evident records of
+every blocked attempt. The dashboard reads this DB.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+from processguard.models import GuardDecision, ToolCall
+
+DEFAULT_DB = Path("audit.db")
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           TEXT NOT NULL,
+    trace_id     TEXT,
+    agent_name   TEXT,
+    bpmn_process TEXT,
+    tool_name    TEXT,
+    tool_args    TEXT,
+    decision     TEXT NOT NULL,
+    violation    TEXT,
+    bpmn_node    TEXT,
+    allowed_next TEXT,
+    corrective   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_decision ON audit_log(decision);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+"""
+
+
+class AuditLog:
+    def __init__(self, db_path: Path | str = DEFAULT_DB):
+        self.db_path = Path(db_path)
+        with self._conn() as c:
+            c.executescript(SCHEMA)
+
+    @contextmanager
+    def _conn(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record(
+        self,
+        decision: GuardDecision,
+        call: ToolCall | None,
+        trace_id: str | None = None,
+        agent_name: str | None = None,
+        bpmn_process: str | None = None,
+    ) -> int:
+        v = decision.violation
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO audit_log (ts, trace_id, agent_name, bpmn_process, "
+                "tool_name, tool_args, decision, violation, bpmn_node, "
+                "allowed_next, corrective) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    trace_id,
+                    agent_name,
+                    bpmn_process,
+                    call.name if call else None,
+                    json.dumps(call.args) if call else None,
+                    decision.decision.value,
+                    v.type.value if v else None,
+                    decision.bpmn_current_node,
+                    json.dumps(decision.allowed_next_tasks),
+                    decision.corrective_message,
+                ),
+            )
+            return cur.lastrowid
+
+    def recent(self, limit: int = 100) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def stats(self) -> dict:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT decision, COUNT(*) AS n FROM audit_log GROUP BY decision"
+            ).fetchall()
+            return {r["decision"]: r["n"] for r in row}

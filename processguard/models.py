@@ -81,3 +81,13 @@ class GuardDecision(BaseModel):
     corrective_message: str | None = None  # injected into agent on BLOCK
     allowed_next_tasks: list[str] = Field(default_factory=list)
     bpmn_current_node: str | None = None
+
+    # ---- LLM-as-judge fields (Week 8) ----
+    # Populated when the optional LLM judge adjudicates a WARN or proposes
+    # a correction for a BLOCK. Pure rule output if the judge is disabled.
+    judge_used: bool = False
+    judge_provider: str | None = None           # "anthropic" | "openai" | "demo"
+    judge_verdict: Decision | None = None        # judge's own ALLOW / BLOCK
+    judge_rationale: str | None = None           # human-readable reasoning
+    judge_confidence: float | None = None        # 0..1
+    suggested_correction: dict[str, Any] | None = None  # e.g. {"tool": "...", "args": {...}}

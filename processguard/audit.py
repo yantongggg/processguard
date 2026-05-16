@@ -102,6 +102,13 @@ class AuditLog:
             "bpmn_node": decision.bpmn_current_node,
             "allowed_next": decision.allowed_next_tasks,
             "corrective": decision.corrective_message,
+            # LLM-judge fields (None when judge disabled)
+            "judge_used": decision.judge_used,
+            "judge_provider": decision.judge_provider,
+            "judge_verdict": decision.judge_verdict.value if decision.judge_verdict else None,
+            "judge_rationale": decision.judge_rationale,
+            "judge_confidence": decision.judge_confidence,
+            "suggested_correction": decision.suggested_correction,
         }
         for cb in list(self.on_record):
             try:

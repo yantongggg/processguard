@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from processguard.bpmn_engine import BPMNProcess, BPMNTask
 from processguard.models import (
@@ -12,6 +13,9 @@ from processguard.models import (
     Violation,
     ViolationType,
 )
+
+if TYPE_CHECKING:
+    from processguard.llm_judge import LLMJudge
 
 
 @dataclass
@@ -35,8 +39,14 @@ class ProcessGuard:
             guard.commit(tool_call)  # advance state machine
     """
 
-    def __init__(self, bpmn: BPMNProcess, context: dict | None = None):
+    def __init__(
+        self,
+        bpmn: BPMNProcess,
+        context: dict | None = None,
+        judge: "LLMJudge | None" = None,
+    ):
         self.bpmn = bpmn
+        self.judge = judge
         self.state = _RunState(
             current_task_id=bpmn.start_task_id,
             context=context or {},
@@ -124,7 +134,7 @@ class ProcessGuard:
         target_not_allowed = step.target not in allowed and bool(self.bpmn.task_by_name(step.target))
 
         if is_bypass_intent or target_not_allowed:
-            return GuardDecision(
+            base = GuardDecision(
                 decision=Decision.WARN,
                 violation=Violation(
                     type=ViolationType.INTENT_DRIFT,
@@ -144,6 +154,39 @@ class ProcessGuard:
                 allowed_next_tasks=sorted(allowed),
                 bpmn_current_node=self._current_name(),
             )
+            # Gray-zone: hand to the LLM judge if available
+            if self.judge is not None:
+                verdict = self.judge.adjudicate(
+                    call=ToolCall(name=step.target, args={}),
+                    allowed_next=sorted(allowed),
+                    history=sorted(self.state.completed_task_names),
+                    current_node=self._current_name(),
+                    context=self.state.context,
+                    violation_hint=(
+                        "intent_drift: bypass language or off-path target"
+                    ),
+                )
+                base.judge_used = True
+                base.judge_provider = verdict.provider
+                base.judge_verdict = verdict.decision
+                base.judge_rationale = verdict.rationale
+                base.judge_confidence = verdict.confidence
+                base.suggested_correction = verdict.suggested_correction
+                # Promote: judge has final say in the gray zone
+                base.decision = verdict.decision
+                if verdict.decision is Decision.BLOCK:
+                    base.corrective_message = (
+                        f"🤖 LLM judge ({verdict.provider}, conf "
+                        f"{verdict.confidence:.0%}) ruled BLOCK: "
+                        f"{verdict.rationale}"
+                    )
+                else:
+                    base.corrective_message = (
+                        f"🤖 LLM judge ({verdict.provider}, conf "
+                        f"{verdict.confidence:.0%}) overrode rule WARN → ALLOW: "
+                        f"{verdict.rationale}"
+                    )
+            return base
 
         return GuardDecision(decision=Decision.ALLOW)
 
@@ -175,7 +218,7 @@ class ProcessGuard:
             f"You MUST choose your next action from: {allowed_names}.\n"
             f"Re-plan and try again."
         )
-        return GuardDecision(
+        decision = GuardDecision(
             decision=Decision.BLOCK,
             violation=Violation(
                 type=vtype,
@@ -189,3 +232,33 @@ class ProcessGuard:
             allowed_next_tasks=allowed_names,
             bpmn_current_node=self._current_name(),
         )
+
+        # If a judge is configured, ask it to propose a corrective tool call
+        # so the agent can self-heal instead of just failing.
+        if self.judge is not None and allowed_names:
+            try:
+                verdict = self.judge.adjudicate(
+                    call=call,
+                    allowed_next=allowed_names,
+                    history=sorted(self.state.completed_task_names),
+                    current_node=self._current_name(),
+                    context=self.state.context,
+                    violation_hint=f"{vtype.value}: {message[:120]}",
+                )
+                decision.judge_used = True
+                decision.judge_provider = verdict.provider
+                decision.judge_verdict = verdict.decision
+                decision.judge_rationale = verdict.rationale
+                decision.judge_confidence = verdict.confidence
+                decision.suggested_correction = verdict.suggested_correction
+                if verdict.suggested_correction and verdict.suggested_correction.get("tool"):
+                    decision.corrective_message += (
+                        f"\n🤖 LLM judge suggests: "
+                        f"{verdict.suggested_correction['tool']}"
+                        f"({verdict.suggested_correction.get('args', {})})"
+                        f"  — {verdict.rationale}"
+                    )
+            except Exception:
+                pass
+
+        return decision

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from processguard.audit import AuditLog
 from processguard.bpmn_engine import load_bpmn
+from processguard.llm_judge import LLMJudge
 
 # ---------------------------------------------------------------------------
 # App + state
@@ -34,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "audit.db"
 BPMN_PATH = ROOT / "examples" / "refund_flow.bpmn"
 audit = AuditLog(DB_PATH)
+judge = LLMJudge(provider="auto")
 
 # Mount UiPath runtime hook (optional)
 try:
@@ -81,6 +83,20 @@ def api_recent(limit: int = 100):
 @app.get("/api/stats")
 def api_stats():
     return JSONResponse(audit.stats())
+
+
+@app.get("/api/judge-info")
+def api_judge_info():
+    """Which LLM provider is currently powering the gray-zone judge."""
+    return JSONResponse({
+        "provider": judge.provider,
+        "label": {
+            "anthropic": "Claude Haiku · live",
+            "openai":    "GPT-4o-mini · live",
+            "demo":      "Demo judge · offline deterministic",
+        }.get(judge.provider, judge.provider),
+        "is_live_llm": judge.provider in ("anthropic", "openai"),
+    })
 
 
 def _task_name_to_id() -> dict[str, str]:
@@ -157,19 +173,22 @@ async def api_demo_run(req: RunRequest):
     async def run():
         for name, factory in scenarios:
             trace = factory()
-            guard = ProcessGuard(bpmn, context=trace.context)
+            guard = ProcessGuard(bpmn, context=trace.context, judge=judge)
             local_audit = AuditLog(DB_PATH)
             n = max(len(trace.reasoning), len(trace.tool_calls))
             for i in range(n):
                 if i < len(trace.reasoning):
                     step = trace.reasoning[i]
                     d = guard.check_reasoning(step)
-                    if d.decision is Decision.WARN:
+                    # Record reasoning whenever it's not a plain ALLOW
+                    # (covers WARN, judge-promoted BLOCK, etc.)
+                    if d.decision is not Decision.ALLOW or d.judge_used:
                         local_audit.record(
                             d, call=None, trace_id=trace.trace_id,
                             agent_name=trace.agent_name,
                             bpmn_process=bpmn.process_id,
                         )
+                        await asyncio.sleep(0.6)
                 if i < len(trace.tool_calls):
                     call = trace.tool_calls[i]
                     d = guard.check_tool_call(call)
@@ -530,6 +549,31 @@ INDEX_HTML = r"""<!doctype html>
     .muted { color:var(--text-mute); font-size:11px; font-variant-numeric: tabular-nums; }
     .corrective { color:var(--text-dim); font-size:11px; max-width:320px; line-height:1.5; }
     .violation-tag { color:var(--rose); font-weight:600; font-size:11px; display:block; margin-bottom:3px; }
+    .judge-block {
+      margin-top:8px; padding:8px 10px; border-radius:8px;
+      background:linear-gradient(135deg, rgba(179,136,255,0.10), rgba(0,229,255,0.06));
+      border:1px solid rgba(179,136,255,0.25);
+      font-size:11px; color:var(--text); line-height:1.45;
+    }
+    .judge-block .jh {
+      display:flex; align-items:center; gap:6px; font-weight:600;
+      color:var(--violet); font-size:10px; text-transform:uppercase;
+      letter-spacing:0.12em; margin-bottom:4px;
+    }
+    .judge-block .jh .conf {
+      margin-left:auto; color:var(--text-mute); font-weight:500;
+      text-transform:none; letter-spacing:0; font-size:10px;
+    }
+    .judge-block .jr { color:var(--text-dim); }
+    .judge-block .jc {
+      margin-top:6px; padding:5px 8px; border-radius:5px;
+      background:rgba(0,229,255,0.10); border:1px solid rgba(0,229,255,0.25);
+      font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--cyan);
+    }
+    .judge-block.allow { border-color:rgba(198,255,0,0.35); }
+    .judge-block.allow .jh { color:var(--lime); }
+    .judge-block.block { border-color:rgba(255,77,125,0.4); }
+    .judge-block.block .jh { color:var(--rose); }
     .empty { padding:48px 20px; text-align:center; color:var(--text-mute); font-size:13px; }
     .empty b { color:var(--cyan); font-weight:500; }
 
@@ -555,6 +599,9 @@ INDEX_HTML = r"""<!doctype html>
       <a href="#">Hackathon</a>
     </div>
     <div class="nav-cta">
+      <span class="pill" id="judgePill" title="LLM judge provider for gray-zone decisions">
+        🧠 <span id="judgeLabel">judge: …</span>
+      </span>
       <span class="pill"><span class="live-dot" id="liveDot"></span><span id="liveStatus">live</span></span>
     </div>
   </nav>
@@ -583,7 +630,8 @@ INDEX_HTML = r"""<!doctype html>
       <option value="compliant">✅  compliant — $12,500 full flow</option>
       <option value="skip_2fa_for_vip" selected>🛑  skip 2FA for VIP — $9,500</option>
       <option value="skip_approval">🛑  skip manager approval — $8,000</option>
-      <option value="all">▶  run all three back-to-back</option>
+      <option value="gray_zone">🧠  gray zone — LLM judge decides — $4,800</option>
+      <option value="all">▶  run all four back-to-back</option>
     </select>
     <button class="btn primary" id="runBtn">
       Run scenario
@@ -722,11 +770,27 @@ function addRow(ev) {
     ? `<span class="violation-tag">${ev.violation}</span>`
     : '';
   const corrective = (ev.corrective || '').slice(0, 200);
+  let judgeHtml = '';
+  if (ev.judge_used) {
+    const cls = ev.judge_verdict === 'ALLOW' ? 'allow' : 'block';
+    const conf = ev.judge_confidence != null
+      ? `conf ${Math.round(ev.judge_confidence * 100)}%` : '';
+    const corrTool = ev.suggested_correction && ev.suggested_correction.tool;
+    const corrHtml = corrTool
+      ? `<div class="jc">→ suggested: ${corrTool}(${JSON.stringify(ev.suggested_correction.args || {})})</div>`
+      : '';
+    judgeHtml = `
+      <div class="judge-block ${cls}">
+        <div class="jh">🧠 LLM judge · ${ev.judge_provider || 'demo'} · ${ev.judge_verdict || ''}<span class="conf">${conf}</span></div>
+        <div class="jr">${(ev.judge_rationale || '').slice(0, 220)}</div>
+        ${corrHtml}
+      </div>`;
+  }
   tr.innerHTML = `
     <td class="muted">${ts}</td>
     <td>${ev.tool_name ? '<code>'+ev.tool_name+'</code>' : '<span class="muted">(reasoning)</span>'}</td>
     <td><span class="decision ${ev.decision}">${ev.decision}</span></td>
-    <td class="corrective">${violation}${corrective}</td>`;
+    <td class="corrective">${violation}${corrective}${judgeHtml}</td>`;
   tbody.insertBefore(tr, tbody.firstChild);
   while (tbody.children.length > 80) tbody.removeChild(tbody.lastChild);
 }
@@ -792,6 +856,15 @@ document.addEventListener('mousemove', (e) => {
 });
 
 (async function init() {
+  // Load judge info
+  try {
+    const ji = await fetch('/api/judge-info').then(r => r.json());
+    document.getElementById('judgeLabel').textContent = 'judge: ' + ji.label;
+    if (ji.is_live_llm) {
+      document.getElementById('judgePill').style.borderColor = 'rgba(179,136,255,0.5)';
+      document.getElementById('judgePill').style.background = 'rgba(179,136,255,0.10)';
+    }
+  } catch (e) {}
   await loadBpmn();
   // Preload existing audit rows into the log + stats
   const recent = await fetch('/api/recent?limit=50').then(r => r.json());

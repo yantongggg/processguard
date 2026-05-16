@@ -189,6 +189,20 @@ Agent type used:
    processguard dashboard --port 8765
    ```
 
+  For UiPath Automation Cloud, the API must be reachable over public HTTPS.
+  The repo includes a Dockerfile and Render blueprint for one-click hosting:
+
+  ```text
+  render.yaml
+  Dockerfile
+  ```
+
+  After deployment, verify the public endpoint:
+
+  ```bash
+  curl https://YOUR-PROCESSGUARD-HOST/uipath/health
+  ```
+
 2. If UiPath Cloud needs to call your laptop, expose it with an HTTPS tunnel
    such as Cloudflare Tunnel or ngrok:
 

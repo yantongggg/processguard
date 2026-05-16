@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: processguard
+    runtime: docker
+    plan: free
+    healthCheckPath: /uipath/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

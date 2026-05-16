@@ -1,76 +1,191 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions
     xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
     xmlns:pg="http://processguard.io/schema"
     id="defs_refund"
     targetNamespace="http://processguard.io/examples">
 
   <bpmn:process id="refund_flow" name="Customer Refund Flow" isExecutable="true">
 
-    <!-- 1. Start -->
-    <bpmn:startEvent id="start" name="receive_refund_request"/>
+    <bpmn:startEvent id="start" name="receive_refund_request">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
 
-    <!-- 2. Verify customer identity (2FA) -->
-    <bpmn:serviceTask id="t_verify_2fa" name="verify_2fa"/>
+    <bpmn:serviceTask id="t_verify_2fa" name="verify_2fa">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:serviceTask>
 
-    <!-- 3. Check amount threshold -->
-    <bpmn:exclusiveGateway id="gw_amount" name="amount_gate"/>
+    <bpmn:exclusiveGateway id="gw_amount" name="amount?">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>f3a</bpmn:outgoing>
+      <bpmn:outgoing>f3b</bpmn:outgoing>
+      <bpmn:outgoing>f3c</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
 
-    <!-- 4a. Small amount: skip approval -->
-    <!-- 4b. Large amount: require manager approval -->
     <bpmn:userTask id="t_manager_approval" name="request_manager_approval">
       <bpmn:extensionElements>
         <pg:requires>verify_2fa</pg:requires>
       </bpmn:extensionElements>
+      <bpmn:incoming>f3b</bpmn:incoming>
+      <bpmn:incoming>f4b</bpmn:incoming>
+      <bpmn:outgoing>f4a</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- 4c. Very large amount: fraud check too -->
     <bpmn:serviceTask id="t_fraud_check" name="fraud_check">
       <bpmn:extensionElements>
         <pg:requires>verify_2fa</pg:requires>
       </bpmn:extensionElements>
+      <bpmn:incoming>f3c</bpmn:incoming>
+      <bpmn:outgoing>f4b</bpmn:outgoing>
     </bpmn:serviceTask>
 
-    <!-- 5. Join -->
-    <bpmn:exclusiveGateway id="gw_join" name="join"/>
+    <bpmn:exclusiveGateway id="gw_join" name="join">
+      <bpmn:incoming>f3a</bpmn:incoming>
+      <bpmn:incoming>f4a</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
 
-    <!-- 6. Execute refund -->
     <bpmn:serviceTask id="t_execute_refund" name="execute_refund">
       <bpmn:extensionElements>
         <pg:requires>verify_2fa</pg:requires>
       </bpmn:extensionElements>
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
     </bpmn:serviceTask>
 
-    <!-- 7. Audit log (mandatory) -->
     <bpmn:serviceTask id="t_audit_log" name="write_audit_log">
       <bpmn:extensionElements>
         <pg:requires>execute_refund</pg:requires>
       </bpmn:extensionElements>
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>f7</bpmn:outgoing>
     </bpmn:serviceTask>
 
-    <!-- 8. End -->
-    <bpmn:endEvent id="end" name="done"/>
+    <bpmn:endEvent id="end" name="done">
+      <bpmn:incoming>f7</bpmn:incoming>
+    </bpmn:endEvent>
 
-    <!-- Flows -->
-    <bpmn:sequenceFlow id="f1" sourceRef="start"             targetRef="t_verify_2fa"/>
-    <bpmn:sequenceFlow id="f2" sourceRef="t_verify_2fa"      targetRef="gw_amount"/>
-
-    <bpmn:sequenceFlow id="f3a" sourceRef="gw_amount" targetRef="gw_join">
+    <bpmn:sequenceFlow id="f1"  sourceRef="start"             targetRef="t_verify_2fa"/>
+    <bpmn:sequenceFlow id="f2"  sourceRef="t_verify_2fa"      targetRef="gw_amount"/>
+    <bpmn:sequenceFlow id="f3a" name="≤ 5K"         sourceRef="gw_amount" targetRef="gw_join">
       <bpmn:conditionExpression>amount &lt;= 5000</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="f3b" sourceRef="gw_amount" targetRef="t_manager_approval">
+    <bpmn:sequenceFlow id="f3b" name="5K – 10K"     sourceRef="gw_amount" targetRef="t_manager_approval">
       <bpmn:conditionExpression>amount &gt; 5000 and amount &lt;= 10000</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="f3c" sourceRef="gw_amount" targetRef="t_fraud_check">
+    <bpmn:sequenceFlow id="f3c" name="&gt; 10K"     sourceRef="gw_amount" targetRef="t_fraud_check">
       <bpmn:conditionExpression>amount &gt; 10000</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-
     <bpmn:sequenceFlow id="f4a" sourceRef="t_manager_approval" targetRef="gw_join"/>
     <bpmn:sequenceFlow id="f4b" sourceRef="t_fraud_check"      targetRef="t_manager_approval"/>
-
-    <bpmn:sequenceFlow id="f5" sourceRef="gw_join"          targetRef="t_execute_refund"/>
-    <bpmn:sequenceFlow id="f6" sourceRef="t_execute_refund" targetRef="t_audit_log"/>
-    <bpmn:sequenceFlow id="f7" sourceRef="t_audit_log"      targetRef="end"/>
+    <bpmn:sequenceFlow id="f5"  sourceRef="gw_join"            targetRef="t_execute_refund"/>
+    <bpmn:sequenceFlow id="f6"  sourceRef="t_execute_refund"   targetRef="t_audit_log"/>
+    <bpmn:sequenceFlow id="f7"  sourceRef="t_audit_log"        targetRef="end"/>
 
   </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="refund_flow">
+
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start">
+        <dc:Bounds x="120" y="192" width="36" height="36"/>
+        <bpmndi:BPMNLabel><dc:Bounds x="92" y="232" width="92" height="14"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="t_verify_2fa_di" bpmnElement="t_verify_2fa">
+        <dc:Bounds x="200" y="180" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="gw_amount_di" bpmnElement="gw_amount" isMarkerVisible="true">
+        <dc:Bounds x="350" y="185" width="50" height="50"/>
+        <bpmndi:BPMNLabel><dc:Bounds x="360" y="245" width="30" height="14"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="t_fraud_check_di" bpmnElement="t_fraud_check">
+        <dc:Bounds x="470" y="60" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="t_manager_approval_di" bpmnElement="t_manager_approval">
+        <dc:Bounds x="640" y="180" width="120" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="gw_join_di" bpmnElement="gw_join" isMarkerVisible="true">
+        <dc:Bounds x="810" y="185" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="t_execute_refund_di" bpmnElement="t_execute_refund">
+        <dc:Bounds x="900" y="180" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="t_audit_log_di" bpmnElement="t_audit_log">
+        <dc:Bounds x="1050" y="180" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="end_di" bpmnElement="end">
+        <dc:Bounds x="1200" y="192" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1">
+        <di:waypoint x="156" y="210"/>
+        <di:waypoint x="200" y="210"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2">
+        <di:waypoint x="300" y="210"/>
+        <di:waypoint x="350" y="210"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f3a_di" bpmnElement="f3a">
+        <di:waypoint x="375" y="235"/>
+        <di:waypoint x="375" y="330"/>
+        <di:waypoint x="835" y="330"/>
+        <di:waypoint x="835" y="235"/>
+        <bpmndi:BPMNLabel><dc:Bounds x="560" y="312" width="40" height="14"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f3b_di" bpmnElement="f3b">
+        <di:waypoint x="400" y="210"/>
+        <di:waypoint x="640" y="210"/>
+        <bpmndi:BPMNLabel><dc:Bounds x="490" y="190" width="60" height="14"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f3c_di" bpmnElement="f3c">
+        <di:waypoint x="375" y="185"/>
+        <di:waypoint x="375" y="90"/>
+        <di:waypoint x="470" y="90"/>
+        <bpmndi:BPMNLabel><dc:Bounds x="385" y="120" width="40" height="14"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f4b_di" bpmnElement="f4b">
+        <di:waypoint x="570" y="90"/>
+        <di:waypoint x="700" y="90"/>
+        <di:waypoint x="700" y="180"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f4a_di" bpmnElement="f4a">
+        <di:waypoint x="760" y="210"/>
+        <di:waypoint x="810" y="210"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f5_di" bpmnElement="f5">
+        <di:waypoint x="860" y="210"/>
+        <di:waypoint x="900" y="210"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f6_di" bpmnElement="f6">
+        <di:waypoint x="1000" y="210"/>
+        <di:waypoint x="1050" y="210"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="f7_di" bpmnElement="f7">
+        <di:waypoint x="1150" y="210"/>
+        <di:waypoint x="1200" y="210"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </bpmn:definitions>

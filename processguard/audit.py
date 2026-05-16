@@ -10,6 +10,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 from processguard.models import GuardDecision, ToolCall
 
@@ -37,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 
 
 class AuditLog:
+    # Class-level subscribers: called with the inserted row dict on every record().
+    # Used by the dashboard to fan events out to SSE clients.
+    on_record: list[Callable[[dict[str, Any]], None]] = []
+
     def __init__(self, db_path: Path | str = DEFAULT_DB):
         self.db_path = Path(db_path)
         with self._conn() as c:
@@ -61,13 +66,14 @@ class AuditLog:
         bpmn_process: str | None = None,
     ) -> int:
         v = decision.violation
+        ts = datetime.now(timezone.utc).isoformat()
         with self._conn() as c:
             cur = c.execute(
                 "INSERT INTO audit_log (ts, trace_id, agent_name, bpmn_process, "
                 "tool_name, tool_args, decision, violation, bpmn_node, "
                 "allowed_next, corrective) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    datetime.now(timezone.utc).isoformat(),
+                    ts,
                     trace_id,
                     agent_name,
                     bpmn_process,
@@ -80,7 +86,29 @@ class AuditLog:
                     decision.corrective_message,
                 ),
             )
-            return cur.lastrowid
+            row_id = cur.lastrowid
+
+        # Fan-out to live subscribers (best-effort, never crash on subscriber error)
+        event = {
+            "id": row_id,
+            "ts": ts,
+            "trace_id": trace_id,
+            "agent_name": agent_name,
+            "bpmn_process": bpmn_process,
+            "tool_name": call.name if call else None,
+            "tool_args": call.args if call else None,
+            "decision": decision.decision.value,
+            "violation": v.type.value if v else None,
+            "bpmn_node": decision.bpmn_current_node,
+            "allowed_next": decision.allowed_next_tasks,
+            "corrective": decision.corrective_message,
+        }
+        for cb in list(self.on_record):
+            try:
+                cb(event)
+            except Exception:
+                pass
+        return row_id
 
     def recent(self, limit: int = 100) -> list[dict]:
         with self._conn() as c:

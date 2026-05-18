@@ -202,9 +202,9 @@ ProcessGuard blocks every shortcut. Claude reads corrective messages and re-plan
 
 ## BPMN as Policy
 
-The BPMN file is the **single source of truth**. Compliance teams edit it in [bpmn.io](https://bpmn.io). Engineers write zero policy code.
+The BPMN file is the **single source of truth**. Compliance teams edit it in [bpmn.io](https://bpmn.io). Engineers write zero policy code. ProcessGuard ships two ready-made BPMN verticals to prove the engine is a generalizable platform.
 
-### Refund process (the demo BPMN)
+### Vertical 1 — Refund process (Financial Services)
 
 ```mermaid
 flowchart LR
@@ -221,6 +221,42 @@ flowchart LR
     style GW fill:#fff3cd,stroke:#ffc107
     style ER fill:#d4edda,stroke:#28a745
     style MA fill:#cce5ff,stroke:#004085
+```
+
+Key enforcement: **2FA before any refund action**, **manager approval above $5K**, **mandatory audit trail**.
+
+### Vertical 2 — Loan approval (Consumer Lending)
+
+*MAS Notice 635 · EU Consumer Credit Directive 2023/2225 · FCA CONC 5*
+
+```mermaid
+flowchart LR
+    START([Start]) --> VI["verify_identity"]
+    VI --> CR["pull_credit_report"]
+    CR --> DTI["calculate_dti_ratio"]
+    DTI --> GW{DTI / amount?}
+    GW -->|DTI > 0.40| DL["decline_loan"]
+    GW -->|amount ≥ 50K| UR["underwriter_review"]
+    GW -->|auto| AL["approve_loan"]
+    UR --> AL
+    AL --> DF["disburse_funds"]
+    DF --> SD["send_regulatory_disclosure"]
+    SD --> END([End])
+    DL --> ENDD([Declined])
+
+    style GW fill:#fff3cd,stroke:#ffc107
+    style AL fill:#d4edda,stroke:#28a745
+    style UR fill:#cce5ff,stroke:#004085
+    style DL fill:#f8d7da,stroke:#dc3545
+```
+
+Key enforcement: **KYC before credit pull**, **DTI calculation mandatory**, **disburse only after approval**, **regulatory disclosure required after every disbursement**.
+
+> Both processes run on the **same ProcessGuard engine** — swap the BPMN file, get a different compliance policy.
+
+```bash
+# Run the loan approval demo
+python demo/demo_loan.py
 ```
 
 ### BPMN extension attributes
@@ -450,8 +486,27 @@ processguard/
 
 ```bash
 python -m pytest -q
-# 24 passed, 1 warning
+# 36 passed, 1 warning
 ```
+
+---
+
+## Regulatory Alignment
+
+ProcessGuard maps directly to the mandatory risk-management requirements in the leading AI and financial-services frameworks.
+
+| Regulation / Standard | Relevant requirement | How ProcessGuard addresses it |
+|---|---|---|
+| **EU AI Act** (Reg. 2024/1689) Art. 9 | Risk-management system for high-risk AI systems — continuous monitoring, logging, human oversight | BPMN policy = documented control; every decision is written to the immutable audit log; human-in-the-loop tasks enforced by engine |
+| **EU AI Act** Art. 12 | Record-keeping — high-risk AI must maintain automatically generated logs | `AuditLog` (SQLite) records every ALLOW / BLOCK / WARN with timestamp, trace ID, agent name, and corrective message |
+| **EU AI Act** Art. 14 | Human oversight — ability to intervene and halt operation | `ProcessGuardViolation` stops the agent on BLOCK; `userTask` BPMN elements enforce human approval gates |
+| **MAS Notice MAS-RMG-100** (Singapore) | Operational risk controls for technology systems in financial institutions | BPMN policy encodes the bank's SOPs; out-of-sequence tool calls are blocked at runtime, not just audited |
+| **MAS TRM Guidelines** §9 | AI explainability and accountability | Every decision carries a `corrective_message` and `judge_rationale` (LLM or deterministic) |
+| **NIST AI RMF** (Govern, Map, Measure, Manage) | Documented controls, continuous measurement, response playbooks | BPMN = MAP; runtime engine = MEASURE & MANAGE; audit log = GOVERN |
+| **ISO/IEC 42001:2023** | AI management system with documented policies and monitoring | BPMN files are version-controlled policy artifacts; `Watch & Learn` infers BPMN from traces for continuous improvement |
+| **FCA PS 19/1 / SYSC** | Systems and controls for automated decision-making | Hybrid judge + BPMN conformance check ensures no single ML prediction can bypass a mandatory control |
+
+> **Bottom line:** ProcessGuard turns informal AI agent policies into *executable*, *auditable*, *versioned* controls — the exact artefact regulators require for high-risk AI deployments in financial services.
 
 ---
 

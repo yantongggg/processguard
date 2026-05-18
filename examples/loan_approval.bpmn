@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:pg="http://processguard.io/schema"
+    id="defs_loan"
+    targetNamespace="http://processguard.io/examples">
+
+  <!--
+    Personal Loan Approval — ProcessGuard example BPMN
+    ====================================================
+    Regulatory context: MAS Notice 635 (Singapore), FCA CONC 5 (UK),
+    EU Consumer Credit Directive 2023/2225.
+
+    Required sequence:
+      1. receive_application
+      2. verify_identity         (KYC / AML check)
+      3. pull_credit_report      (requires verify_identity)
+      4. calculate_dti_ratio     (requires pull_credit_report — Debt-to-Income)
+         [gateway] dti ≤ 0.40?
+           YES → underwriter_review (loans ≥ 50 000)  OR → approve_loan
+           NO  → decline_loan
+      5. approve_loan / decline_loan
+      6. disburse_funds          (requires approve_loan)
+      7. send_disclosure         (required by regulation, must follow disburse)
+  -->
+
+  <bpmn:process id="loan_approval" name="Personal Loan Approval" isExecutable="true">
+
+    <!-- ── Start ── -->
+    <bpmn:startEvent id="start" name="receive_application">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Step 1: KYC / Identity -->
+    <bpmn:serviceTask id="t_verify_identity" name="verify_identity">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Step 2: Credit report -->
+    <bpmn:serviceTask id="t_pull_credit_report" name="pull_credit_report">
+      <bpmn:extensionElements>
+        <pg:requires>verify_identity</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Step 3: DTI calculation -->
+    <bpmn:serviceTask id="t_calculate_dti" name="calculate_dti_ratio">
+      <bpmn:extensionElements>
+        <pg:requires>pull_credit_report</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Gateway: DTI + loan amount -->
+    <bpmn:exclusiveGateway id="gw_risk" name="risk?">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f5a</bpmn:outgoing>
+      <bpmn:outgoing>f5b</bpmn:outgoing>
+      <bpmn:outgoing>f5c</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- High-risk: DTI > 0.40 → decline -->
+    <bpmn:serviceTask id="t_decline_loan" name="decline_loan">
+      <bpmn:extensionElements>
+        <pg:requires>calculate_dti_ratio</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f5a</bpmn:incoming>
+      <bpmn:outgoing>f8a</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Large loan (≥ 50K, DTI ≤ 0.40): requires underwriter -->
+    <bpmn:userTask id="t_underwriter_review" name="underwriter_review">
+      <bpmn:extensionElements>
+        <pg:requires>calculate_dti_ratio</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f5b</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Join gateway -->
+    <bpmn:exclusiveGateway id="gw_join" name="join">
+      <bpmn:incoming>f5c</bpmn:incoming>
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>f7</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Approve -->
+    <bpmn:serviceTask id="t_approve_loan" name="approve_loan">
+      <bpmn:extensionElements>
+        <pg:requires>calculate_dti_ratio</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f7</bpmn:incoming>
+      <bpmn:outgoing>f8b</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Disburse (requires approval — never before) -->
+    <bpmn:serviceTask id="t_disburse_funds" name="disburse_funds">
+      <bpmn:extensionElements>
+        <pg:requires>approve_loan</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f8b</bpmn:incoming>
+      <bpmn:outgoing>f9</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Regulatory disclosure (must follow disbursement) -->
+    <bpmn:serviceTask id="t_send_disclosure" name="send_regulatory_disclosure">
+      <bpmn:extensionElements>
+        <pg:requires>disburse_funds</pg:requires>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f9</bpmn:incoming>
+      <bpmn:outgoing>f10a</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- End events -->
+    <bpmn:endEvent id="end_approved" name="loan_complete">
+      <bpmn:incoming>f10a</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_declined" name="loan_declined">
+      <bpmn:incoming>f8a</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ── Sequence Flows ── -->
+    <bpmn:sequenceFlow id="f1" sourceRef="start"               targetRef="t_verify_identity"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="t_verify_identity"   targetRef="t_pull_credit_report"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="t_pull_credit_report" targetRef="t_calculate_dti"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="t_calculate_dti"     targetRef="gw_risk"/>
+
+    <bpmn:sequenceFlow id="f5a" name="DTI &gt; 0.40"
+        sourceRef="gw_risk" targetRef="t_decline_loan">
+      <bpmn:conditionExpression>dti_ratio &gt; 0.40</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f5b" name="DTI ok, amount &gt;= 50K"
+        sourceRef="gw_risk" targetRef="t_underwriter_review">
+      <bpmn:conditionExpression>dti_ratio &lt;= 0.40 and loan_amount &gt;= 50000</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f5c" name="DTI ok, amount &lt; 50K"
+        sourceRef="gw_risk" targetRef="gw_join">
+      <bpmn:conditionExpression>dti_ratio &lt;= 0.40 and loan_amount &lt; 50000</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f6"  sourceRef="t_underwriter_review" targetRef="gw_join"/>
+    <bpmn:sequenceFlow id="f7"  sourceRef="gw_join"              targetRef="t_approve_loan"/>
+    <bpmn:sequenceFlow id="f8a" sourceRef="t_decline_loan"       targetRef="end_declined"/>
+    <bpmn:sequenceFlow id="f8b" sourceRef="t_approve_loan"       targetRef="t_disburse_funds"/>
+    <bpmn:sequenceFlow id="f9"  sourceRef="t_disburse_funds"     targetRef="t_send_disclosure"/>
+    <bpmn:sequenceFlow id="f10a" sourceRef="t_send_disclosure"   targetRef="end_approved"/>
+
+  </bpmn:process>
+
+  <!-- ── BPMN DI (layout for bpmn-js viewer) ── -->
+  <bpmndi:BPMNDiagram id="di_loan">
+    <bpmndi:BPMNPlane id="pl_loan" bpmnElement="loan_approval">
+
+      <bpmndi:BPMNShape id="s_start"        bpmnElement="start"               isMarkerVisible="true">
+        <dc:Bounds x="152" y="232" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_verify"       bpmnElement="t_verify_identity">
+        <dc:Bounds x="240" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_credit"       bpmnElement="t_pull_credit_report">
+        <dc:Bounds x="420" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_dti"          bpmnElement="t_calculate_dti">
+        <dc:Bounds x="600" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_gw_risk"      bpmnElement="gw_risk"             isMarkerVisible="true">
+        <dc:Bounds x="785" y="225" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_decline"      bpmnElement="t_decline_loan">
+        <dc:Bounds x="900" y="90" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_underwriter"  bpmnElement="t_underwriter_review">
+        <dc:Bounds x="900" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_gw_join"      bpmnElement="gw_join"             isMarkerVisible="true">
+        <dc:Bounds x="1085" y="225" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_approve"      bpmnElement="t_approve_loan">
+        <dc:Bounds x="1190" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_disburse"     bpmnElement="t_disburse_funds">
+        <dc:Bounds x="1370" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_disclosure"   bpmnElement="t_send_disclosure">
+        <dc:Bounds x="1550" y="210" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_approved" bpmnElement="end_approved">
+        <dc:Bounds x="1732" y="232" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_declined" bpmnElement="end_declined">
+        <dc:Bounds x="982" y="112" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="e_f1"   bpmnElement="f1">  <di:waypoint x="188" y="250"/> <di:waypoint x="240" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f2"   bpmnElement="f2">  <di:waypoint x="360" y="250"/> <di:waypoint x="420" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f3"   bpmnElement="f3">  <di:waypoint x="540" y="250"/> <di:waypoint x="600" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f4"   bpmnElement="f4">  <di:waypoint x="720" y="250"/> <di:waypoint x="785" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f5a"  bpmnElement="f5a"> <di:waypoint x="810" y="225"/> <di:waypoint x="810" y="130"/> <di:waypoint x="900" y="130"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f5b"  bpmnElement="f5b"> <di:waypoint x="835" y="250"/> <di:waypoint x="900" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f5c"  bpmnElement="f5c"> <di:waypoint x="810" y="275"/> <di:waypoint x="810" y="370"/> <di:waypoint x="1110" y="370"/> <di:waypoint x="1110" y="275"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f6"   bpmnElement="f6">  <di:waypoint x="1020" y="250"/> <di:waypoint x="1085" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f7"   bpmnElement="f7">  <di:waypoint x="1135" y="250"/> <di:waypoint x="1190" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f8a"  bpmnElement="f8a"> <di:waypoint x="960" y="130"/> <di:waypoint x="982" y="130"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f8b"  bpmnElement="f8b"> <di:waypoint x="1310" y="250"/> <di:waypoint x="1370" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f9"   bpmnElement="f9">  <di:waypoint x="1490" y="250"/> <di:waypoint x="1550" y="250"/> </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e_f10a" bpmnElement="f10a"><di:waypoint x="1670" y="250"/> <di:waypoint x="1732" y="250"/> </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

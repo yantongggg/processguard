@@ -7,3 +7,9 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      # Set one of the following to enable the live LLM judge.
+      # Leave blank to use the built-in deterministic demo judge.
+      - key: ANTHROPIC_API_KEY
+        sync: false   # fill in the Render dashboard — never commit the value
+      - key: OPENAI_API_KEY
+        sync: false   # alternative if no Anthropic key

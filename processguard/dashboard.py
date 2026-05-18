@@ -33,9 +33,16 @@ from processguard.llm_judge import LLMJudge
 app = FastAPI(title="ProcessGuard")
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "audit.db"
-BPMN_PATH = ROOT / "examples" / "refund_flow.bpmn"
+EXAMPLES_DIR = ROOT / "examples"
 audit = AuditLog(DB_PATH)
 judge = LLMJudge(provider="auto")
+
+# All BPMN processes — key = process_id, value = path
+BPMN_CATALOG: dict[str, Path] = {
+    "refund_flow":    EXAMPLES_DIR / "refund_flow.bpmn",
+    "loan_approval":  EXAMPLES_DIR / "loan_approval.bpmn",
+}
+DEFAULT_PROCESS = "refund_flow"
 
 # Mount UiPath runtime hook (optional)
 try:
@@ -65,13 +72,31 @@ if _fanout not in AuditLog.on_record:
 # ---------------------------------------------------------------------------
 # Static API
 # ---------------------------------------------------------------------------
+@app.get("/api/bpmn/list")
+def api_bpmn_list():
+    """Return available BPMN processes with labels."""
+    return JSONResponse([
+        {
+            "id": pid,
+            "label": {
+                "refund_flow":   "Refund Flow  (Financial Services)",
+                "loan_approval": "Loan Approval  (Consumer Lending)",
+            }.get(pid, pid),
+        }
+        for pid, path in BPMN_CATALOG.items()
+        if path.exists()
+    ])
+
+
 @app.get("/api/bpmn")
-def api_bpmn():
-    if not BPMN_PATH.exists():
-        raise HTTPException(404, "BPMN file not found")
+def api_bpmn(process: str = DEFAULT_PROCESS):
+    path = BPMN_CATALOG.get(process)
+    if path is None or not path.exists():
+        raise HTTPException(404, f"BPMN process '{process}' not found")
     return JSONResponse({
-        "xml": BPMN_PATH.read_text(),
-        "task_name_to_id": _task_name_to_id(),
+        "xml": path.read_text(),
+        "task_name_to_id": _task_name_to_id(process),
+        "process_id": process,
     })
 
 
@@ -99,8 +124,9 @@ def api_judge_info():
     })
 
 
-def _task_name_to_id() -> dict[str, str]:
-    bpmn = load_bpmn(BPMN_PATH)
+def _task_name_to_id(process: str = DEFAULT_PROCESS) -> dict[str, str]:
+    path = BPMN_CATALOG.get(process, BPMN_CATALOG[DEFAULT_PROCESS])
+    bpmn = load_bpmn(path)
     return {t.name: t.id for t in bpmn.tasks.values()}
 
 
@@ -142,7 +168,8 @@ async def api_stream(request: Request):
 # Demo runner (D)
 # ---------------------------------------------------------------------------
 class RunRequest(BaseModel):
-    scenario: str  # "compliant" | "skip_2fa_for_vip" | "skip_approval" | "all"
+    scenario: str  # "compliant" | "skip_2fa_for_vip" | ... | "all"
+    process: str = DEFAULT_PROCESS  # which BPMN to use
     reset: bool = False
 
 
@@ -152,23 +179,29 @@ async def api_demo_run(req: RunRequest):
     # Lazy import (so dashboard works without examples on path)
     import sys
     sys.path.insert(0, str(ROOT))
-    from examples.traces import ALL_TRACES  # type: ignore
     from processguard import ProcessGuard
     from processguard.models import Decision
+
+    # Select trace set based on chosen BPMN process
+    if req.process == "loan_approval":
+        from examples.loan_traces import ALL_TRACES  # type: ignore
+    else:
+        from examples.traces import ALL_TRACES  # type: ignore
 
     if req.reset and DB_PATH.exists():
         DB_PATH.unlink()
         global audit
         audit = AuditLog(DB_PATH)
 
-    bpmn = load_bpmn(BPMN_PATH)
+    bpmn_path = BPMN_CATALOG.get(req.process, BPMN_CATALOG[DEFAULT_PROCESS])
+    bpmn = load_bpmn(bpmn_path)
 
     if req.scenario == "all":
         scenarios = list(ALL_TRACES.items())
     elif req.scenario in ALL_TRACES:
         scenarios = [(req.scenario, ALL_TRACES[req.scenario])]
     else:
-        raise HTTPException(400, f"unknown scenario '{req.scenario}'")
+        raise HTTPException(400, f"unknown scenario '{req.scenario}' for process '{req.process}'")
 
     async def run():
         for name, factory in scenarios:
@@ -625,14 +658,10 @@ INDEX_HTML = r"""<!doctype html>
   </section>
 
   <div class="control-bar">
-    <span class="label-tag">Scenario</span>
-    <select class="scenario" id="scenario">
-      <option value="compliant">✅  compliant — $12,500 full flow</option>
-      <option value="skip_2fa_for_vip" selected>🛑  skip 2FA for VIP — $9,500</option>
-      <option value="skip_approval">🛑  skip manager approval — $8,000</option>
-      <option value="gray_zone">🧠  gray zone — LLM judge decides — $4,800</option>
-      <option value="all">▶  run all four back-to-back</option>
-    </select>
+    <span class="label-tag">Process</span>
+    <select class="scenario" id="processSelect" style="min-width:220px;"></select>
+    <span class="label-tag" style="margin-left:12px;">Scenario</span>
+    <select class="scenario" id="scenario"></select>
     <button class="btn primary" id="runBtn">
       Run scenario
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
@@ -644,7 +673,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title">BPMN process · live agent position</span>
-        <span class="panel-subtitle">refund_flow.bpmn</span>
+        <span class="panel-subtitle" id="bpmnSubtitle">loading…</span>
       </div>
       <div id="canvas"></div>
     </div>
@@ -679,15 +708,71 @@ INDEX_HTML = r"""<!doctype html>
   </main>
 
 <script>
+// ----- BPMN catalog + process selector -----------------------------------
+const SCENARIO_CATALOG = {
+  refund_flow: [
+    { value: 'compliant',        label: '✅  compliant — $12,500 full flow' },
+    { value: 'skip_2fa_for_vip', label: '🛑  skip 2FA for VIP — $9,500', selected: true },
+    { value: 'skip_approval',    label: '🛑  skip manager approval — $8,000' },
+    { value: 'gray_zone',        label: '🧠  gray zone — LLM judge — $4,800' },
+    { value: 'all',              label: '▶  run all back-to-back' },
+  ],
+  loan_approval: [
+    { value: 'small_loan_compliant',     label: '✅  small loan $20K — auto-approved' },
+    { value: 'large_loan_compliant',     label: '✅  large loan $75K — underwriter path' },
+    { value: 'skip_credit_check',        label: '🛑  skip credit check (MAS §4 violation)', selected: true },
+    { value: 'disburse_before_approval', label: '🛑  disburse before approval — dangerous' },
+    { value: 'fast_track_vip',           label: '🧠  fast-track premium — gray zone' },
+    { value: 'all',                      label: '▶  run all back-to-back' },
+  ],
+};
+
+let currentProcess = 'refund_flow';
+
+function populateScenarios(processId) {
+  const sel = document.getElementById('scenario');
+  sel.innerHTML = '';
+  const opts = SCENARIO_CATALOG[processId] || [];
+  opts.forEach(o => {
+    const el = document.createElement('option');
+    el.value = o.value; el.textContent = o.label;
+    if (o.selected) el.selected = true;
+    sel.appendChild(el);
+  });
+}
+
+async function loadProcessList() {
+  const r = await fetch('/api/bpmn/list');
+  const list = await r.json();
+  const sel = document.getElementById('processSelect');
+  sel.innerHTML = '';
+  list.forEach(p => {
+    const el = document.createElement('option');
+    el.value = p.id; el.textContent = p.label;
+    sel.appendChild(el);
+  });
+  sel.value = currentProcess;
+  sel.addEventListener('change', async () => {
+    currentProcess = sel.value;
+    populateScenarios(currentProcess);
+    await loadBpmn(currentProcess);
+  });
+  populateScenarios(currentProcess);
+}
+
 // ----- bpmn-js viewer ------------------------------------------------------
 const viewer = new BpmnJS({ container: '#canvas' });
 let nameToId = {};
 let currentId = null;
 
-async function loadBpmn() {
-  const r = await fetch('/api/bpmn');
+async function loadBpmn(processId) {
+  processId = processId || currentProcess;
+  const r = await fetch('/api/bpmn?process=' + encodeURIComponent(processId));
   const data = await r.json();
   nameToId = data.task_name_to_id;
+  const sub = document.getElementById('bpmnSubtitle');
+  if (sub) sub.textContent = processId + '.bpmn';
+  clearMarkers();
   try {
     await viewer.importXML(data.xml);
     viewer.get('canvas').zoom('fit-viewport', 'auto');
@@ -831,7 +916,7 @@ document.getElementById('runBtn').addEventListener('click', async () => {
   await fetch('/api/demo/run', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ scenario, reset: false }),
+    body: JSON.stringify({ scenario, process: currentProcess, reset: false }),
   });
 });
 
@@ -865,7 +950,8 @@ document.addEventListener('mousemove', (e) => {
       document.getElementById('judgePill').style.background = 'rgba(179,136,255,0.10)';
     }
   } catch (e) {}
-  await loadBpmn();
+  await loadProcessList();
+  await loadBpmn(currentProcess);
   // Preload existing audit rows into the log + stats
   const recent = await fetch('/api/recent?limit=50').then(r => r.json());
   recent.reverse().forEach(r => {

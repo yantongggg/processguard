@@ -1,0 +1,28 @@
+{
+  "name": "processguard-demo-video",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "preview": "remotion preview src/index.tsx",
+    "still": "remotion still src/index.tsx ProcessGuardDemo out/still.png --frame=1800",
+    "still:movie": "remotion still src/index.tsx ProcessGuardMovie out/movie-still.png --frame=3600",
+    "render": "remotion render src/index.tsx ProcessGuardDemo out/processguard-demo.mp4 --codec=h264 --crf=18",
+    "render:movie": "remotion render src/index.tsx ProcessGuardMovie out/processguard-movie.mp4 --codec=h264 --crf=18",
+    "render:fast": "remotion render src/index.tsx ProcessGuardDemo out/processguard-demo-draft.mp4 --codec=h264 --crf=28 --concurrency=4"
+  },
+  "dependencies": {
+    "@remotion/cli": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "remotion": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  }
+}
